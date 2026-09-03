@@ -1,0 +1,88 @@
+Act as a Principal Full-Stack Engineer and Real-Time AI Systems Architect. We are building an end-to-end "Round-0 AI Interview System" for a hackathon.
+
+Core Concept: A candidate opens a web app, grants camera and mic access, and undergoes a live, sub-second latency conversational interview with an AI interviewer via WebRTC (OpenAI Realtime API). 
+
+New High-Value Additions:
+1. Full Session Recording: Record the candidate's video + audio stream using browser `MediaRecorder` (WebM/MP4), upload the final recording to AWS S3 using presigned upload URLs upon interview completion.
+2. AI Proctoring & Red-Flag Detection (Client-Side Real-Time):
+   - Multi-person detection: Detects when someone else enters the frame or sits behind the candidate (using @mediapipe/tasks-vision FaceDetector or ObjectDetector).
+   - Candidate absence: Detects when 0 faces are in view for >3 seconds.
+   - Suspicious device/phone detection: Detects smartphone/handheld device usage via object detection or hand-to-ear proximity.
+   - Tab switching / Window blur: Listens to document `visibilitychange` and window `blur` events.
+3. Red Flag Snapshot Engine:
+   - When any violation occurs, capture a frame snapshot from the video element to an off-screen `<canvas>`.
+   - Convert frame to JPEG blob and immediately upload to S3 under `/interviews/{sessionId}/flags/{timestamp}_{flagType}.jpg`.
+   - Log metadata: `{ id, timestamp, type, description, s3Url }`.
+4. Recruiter Audit Scorecard:
+   - Recruiter scorecard displays the full recorded video player and an interactive "Red Flag Timeline" with clickable timestamped badges and visual snapshots.
+
+---
+
+### Tech Stack & Architecture
+- Framework: Next.js (App Router), TypeScript, Tailwind CSS, Lucide Icons.
+- Live Conversational Voice: Direct browser WebRTC connection to OpenAI Realtime API (`gpt-4o-realtime-preview`) brokered via an ephemeral token from `/api/session`.
+- Proctoring & Vision: `@mediapipe/tasks-vision` running client-side via WASM/WebGL for real-time face and object tracking without latency overhead.
+- Storage: AWS S3 (`@aws-sdk/client-s3` and `@aws-sdk/s3-request-presigner`) for direct client-to-S3 uploads via presigned URLs.
+- Backend Routes: Next.js Route Handlers (Node.js runtime).
+
+---
+
+### Hardcoded Resume Profile (`lib/resumeData.ts`)
+- Candidate: Alex Doe (Senior Backend Engineer, 5 Years Exp)
+- Core Tech: TypeScript, Node.js, Python, PostgreSQL, Redis, Kafka, Distributed Systems.
+- Projects:
+  1. Distributed Task Scheduler: Redis sorted sets + Postgres advisory locks for worker coordination.
+  2. Sliding Window Rate Limiter: Redis cluster backed token-bucket engine.
+- Hardcoded Rubric: Concurrency & race conditions, caching & consistency, failure mode handling.
+
+---
+
+### Key Modules to Implement
+
+1. AWS S3 Presigned URL Generator (`app/api/upload-url/route.ts`):
+   - Accepts `{ sessionId, fileName, fileType, flagType? }`.
+   - Uses `PutObjectCommand` and `getSignedUrl` from `@aws-sdk/s3-request-presigner`.
+   - Returns `{ uploadUrl, fileKey, publicUrl }`.
+
+2. Client Proctoring Hook (`hooks/useProctoring.ts`):
+   - Loads MediaPipe Face Detector (`@mediapipe/tasks-vision`) initialized with `minDetectionConfidence: 0.6`.
+   - Runs a `requestAnimationFrame` loop on the active webcam feed:
+     * `faces.length > 1`: Flag -> `MULTIPLE_FACES_DETECTED` ("Another person detected in camera frame").
+     * `faces.length === 0`: Debounced 3 seconds -> `CANDIDATE_ABSENT` ("Candidate left camera view").
+   - Event listeners for `document.addEventListener('visibilitychange')` and `window.addEventListener('blur')`:
+     * Flag -> `TAB_SWITCH_DETECTED` ("Candidate navigated away from interview tab").
+   - On Flag Trigger:
+     - Cooldown mechanism (prevent duplicate uploads within 8 seconds for the same violation type).
+     - Renders current video frame to a hidden `<canvas>`, extracts `.toBlob(..., 'image/jpeg')`.
+     - Calls `/api/upload-url` and directly PUTs the JPEG snapshot to S3.
+     - Emits flag metadata to the parent component.
+
+3. Session Recorder Hook (`hooks/useSessionRecorder.ts`):
+   - Combines local webcam/mic MediaStream into a `MediaRecorder` instance (`mimeType: 'video/webm;codecs=vp8,opus'`).
+   - Collects `dataavailable` chunks.
+   - On `stop()`, creates a single combined `Blob`, requests a presigned S3 URL from `/api/upload-url`, and PUTs the full video to S3 under `/interviews/{sessionId}/full_recording.webm`.
+
+4. Video Call & Interview Room (`app/interview/page.tsx`):
+   - Candidate video feed overlay with subtle proctoring status indicator (green checkmark for "Secure", amber badge showing warnings if flags are triggered).
+   - Audio visualizer canvas reacting to AI's WebRTC audio output stream.
+   - Live Recruiter Telemetry drawer showing:
+     * Live transcript stream.
+     * Real-time detected red flag ticker with clickable snapshot previews.
+   - On "End Interview":
+     1. Closes WebRTC peer connection and stops camera tracks.
+     2. Triggers `recorder.stop()` and waits for final S3 upload.
+     3. Submits session transcript and flag audit log to `/api/evaluate`.
+     4. Redirects to `/scorecard?sessionId={id}`.
+
+5. Recruiter Scorecard & Red Flag Review (`app/scorecard/page.tsx`):
+   - Left Column: Technical Scorecard (Overall Hire Recommendation, 1-5 Competency Breakdown, Strengths & Weaknesses).
+   - Right Column: Integrity & Proctoring Audit:
+     - Embedded HTML5 `<video>` player pointing to the full S3 recording.
+     - "Flagged Incidents" Timeline:
+       * Lists each flag with exact timestamp (e.g., `04:12 - Multiple People Detected`).
+       * Thumbnail preview of the captured S3 snapshot. Clicking opens a modal for instant verification.
+       * Direct "Jump to Video Time" button setting `videoElement.currentTime = flag.timeInSeconds`.
+
+---
+
+### Project File Structure
