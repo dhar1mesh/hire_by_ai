@@ -1,0 +1,17 @@
+{
+  "name": "hire-by-ai",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Round-0 AI Technical Interview System (Monorepo: Frontend + Backend)",
+  "scripts": {
+    "dev:backend": "npm --prefix backend run dev",
+    "dev:frontend": "npm --prefix frontend run dev",
+    "dev": "npm run start:all",
+    "build:backend": "npm --prefix backend run build",
+    "build:frontend": "npm --prefix frontend run build",
+    "build": "npm run build:backend && npm run build:frontend",
+    "start:backend": "npm --prefix backend run start",
+    "start:frontend": "npm --prefix frontend run start",
+    "start:all": "npx concurrently -n \"backend,frontend\" -c \"cyan,magenta\" \"npm run start:backend\" \"npm run start:frontend\""
+  }
+}
